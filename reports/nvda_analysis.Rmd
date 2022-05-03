@@ -5,7 +5,7 @@ date: "5/3/2022"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup}
 library(reticulate)
 library(tidyverse)
 library(highcharter)
@@ -15,9 +15,16 @@ library(forecast)
 library(Metrics)
 library(rlang)
 library(prophet)
-library(shiny)
+library(rstudioapi)
 
 knitr::opts_chunk$set(echo = TRUE)
+
+# Set working dir to file location
+if(Sys.getenv("RSTUDIO") == "1") {
+  setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+} else {
+  setwd(getSrcDirectory()[1])
+}
 
 # Python resources
 use_virtualenv("../venv")
