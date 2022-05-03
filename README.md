@@ -28,7 +28,7 @@ source venv/bin/activate  # For linux/mac
 pip install -r requirements.txt
 ```
 
-The R package dependencies are managed with renv. 
+The R package dependencies are managed with [renv](https://rstudio.github.io/renv/articles/renv.html). 
 
 To automatically download/install packages run the [setup.R](./setup.R) script.
 
