@@ -126,8 +126,8 @@ def ensemble_lstm(start, end, ncol=6):
     x_data, y_data = create_dataset(data)
     
     predictions = list()
-    nvda_less_adamax_ES_b32 = load_model("../reports/nvda_less_adamax_ES_b64.h5")
-    nvda_less_adamax_e30_b64 = load_model("../reports/nvda_less_adamax_e30_b64.h5")
+    nvda_less_adamax_ES_b32 = load_model("../reports/lstm_models/nvda_less_adamax_ES_b64.h5")
+    nvda_less_adamax_e30_b64 = load_model("../reports/lstm_models/nvda_less_adamax_e30_b64.h5")
     models = [nvda_less_adamax_ES_b32, nvda_less_adamax_e30_b64]
     for model in models:
         pred = model.predict(x_data)

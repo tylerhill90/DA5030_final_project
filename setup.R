@@ -9,6 +9,7 @@ library(forecast)
 library(Metrics)
 library(rlang)
 library(prophet)
+library(shiny)
 
 
 # Python resources

@@ -40,6 +40,8 @@ The intent of this analysis is to develop models for predicting the price of NVD
 
 - [Building an ensemble model]
 
+- [Conclusion]
+
 ## Input the data
 
 I will use the [reticulate](https://rstudio.github.io/reticulate/) R package to interface with the Python code I wrote in [wrangle.html](./wrangle.html) to fetch stock symbol data. I will only keep dates up until April 29th, 2022 so that the code is more reproducible.
@@ -678,7 +680,7 @@ for(i in 0:(nrow(split_data$test)-n_days)) {
   ets_fit <- ets(rbind.xts(split_data$train, split_data$validate, split_data$test[0:i]))
   ets_pred <- forecast(ets_fit, h=5)
   if(i == 0) {
-    xi <- split_data$og_train[(length(split_data$og_validate)-trans_ts$lag):length(split_data$og_validate)]
+    xi <- split_data$og_validate[(length(split_data$og_validate)-trans_ts$lag):length(split_data$og_validate)]
   } else {
     xi <- split_data$og_test[i:(i+trans_ts$lag)]
   }
@@ -745,3 +747,51 @@ rmse(preds_df$Close, preds_df$lstm)
 ```
 
 It looks like the ETS model performs best. This is kinda of discouraging since the five day forecast with ETS model was basically just an extension of the current price. What these results tell me is that trying to predict stock prices is very very hard and my simple approaches do not come close to a good answer.
+
+Let's make a ensemble model function and predict into the future.
+
+```{r}
+ensemble_model <- function(data) {
+  n_days <- 5
+  
+  # ets
+  trans_ts <- determine_trans(data)
+  cat("Predicting ETS ...\n")
+  ets_fit <- ets(trans_ts$diff)
+  ets_pred <- forecast(ets_fit, h=5)
+  xi <- data[(length(data)-trans_ts$lag):length(data)]
+  ets_pred <- untrans(ets_pred$mean, trans_ts, xi) %>% tail(1)
+  
+  # knn_ts
+  cat("Predicting kNN ...\n")
+  data <- data[,1] %>% r_to_py()
+  pred <- knn_ts(data, 15, 8, 2, 5)
+  knn_pred <- pred$predictions[5]
+  
+  # lstm-rnn
+  cat("Predicting LSTM-RNN ...\n")
+  start <- index(data) %>% head(1)
+  end <- index(data) %>% tail(1)
+  preds <- ensemble_lstm(start, end)
+  lstm_pred <- preds %>% tail(1)
+  
+  # compile
+  preds_df <- data.frame(
+    ets = ets_pred,
+    knn = knn_pred,
+    lstm = lstm_pred,
+    mu = mean(ets_pred, knn_pred, lstm_pred)
+  )
+  preds_df
+}
+
+(pred <- ensemble_model(xts_nvda$Close))
+```
+
+Seeing as we are using all the available data up to April 29th, 2022 here, this prediction would be for May 6th which is five trading days later. It looks like the ensemble predicts a price of $198.88 but time will tell how accurate this prediction really  is.
+
+## Conclusion
+
+I have learned a lot doing this project. The main take away for me is that these naive approaches do not do a good job at capturing my intended use, namely forecasting closing stock price five days out to inform options trading strategies. 
+
+I think the LSTM-RNN approach could be improved upon with future work but that would require many more hours of gathering and bringing in associated data (maybe Google Trends, Consumer Price Index, etc.), exploring new model architectures, and fine tuning parameters.
