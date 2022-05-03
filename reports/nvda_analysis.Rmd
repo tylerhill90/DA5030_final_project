@@ -1,21 +1,23 @@
 ---
-title: "NVDA univariate forecasting analysis"
+title: "NVDA stock price time series forecasting analysis"
 author: "Tyler Hill"
 date: "5/3/2022"
 output: html_document
 ---
 
 ```{r setup}
-library(reticulate)
-library(tidyverse)
-library(highcharter)
-library(xts)
-library(TTR)
-library(forecast)
-library(Metrics)
-library(rlang)
-library(prophet)
-library(rstudioapi)
+suppressPackageStartupMessages({
+  library(reticulate)
+  library(tidyverse)
+  library(highcharter)
+  library(xts)
+  library(TTR)
+  library(forecast)
+  library(Metrics)
+  library(rlang)
+  library(prophet)
+  library(rstudioapi)
+})
 
 knitr::opts_chunk$set(echo = TRUE)
 
