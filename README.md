@@ -38,3 +38,5 @@ Rscript setup.R
 ```
 
 renv should then bootstrap itself and install all necessary libraries.
+
+**Note:** This project is configured to use R version '4.2.0'. If you are not using this version then renv will not work properly and you will have to install packages manually.
