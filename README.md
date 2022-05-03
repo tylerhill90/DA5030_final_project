@@ -28,4 +28,13 @@ source venv/bin/activate  # For linux/mac
 pip install -r requirements.txt
 ```
 
-The R package dependencies are managed with renv which should automatically download/install packages the first time you open an R environment within the project directory via the .Rprofile. If this is not the case renv should run when you execute the [nvda_analysis.Rmd](./reports/nvda_analysis.Rmd) file as well.
+The R package dependencies are managed with renv. 
+
+To automatically download/install packages run the [setup.R](./setup.R) script.
+
+```
+which Rscript  # If you need the exact path
+Rscript setup.R
+```
+
+renv should then bootstrap itself and install all necessary libraries.
