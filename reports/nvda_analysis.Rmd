@@ -20,8 +20,8 @@ library(shiny)
 knitr::opts_chunk$set(echo = TRUE)
 
 # Python resources
-use_virtualenv("./venv")
-source_python("./python/functions.py")
+use_virtualenv("../venv")
+source_python("../python/functions.py")
 
 # Highcharter custom theme
 thm <- hc_theme(
