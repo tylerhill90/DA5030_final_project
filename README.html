@@ -60,6 +60,7 @@ if (window.hljs) {
 
 
 
+
 <style type="text/css">
 .main-container {
   max-width: 940px;
@@ -80,6 +81,9 @@ button.code-folding-btn:focus {
 }
 summary {
   display: list-item;
+}
+details > summary > p:only-child {
+  display: inline;
 }
 pre code {
   padding: 0;
@@ -167,12 +171,27 @@ pre code {
 </div>
 
 
-<div id="nvidia-stock-price-time-series-analysis" class="section level1">
-<h1>Nvidia stock price time series analysis</h1>
-<p>The reports directory contains the rendered html reports as well as the Rmarkdown and Jupyter notebooks for this project.</p>
-<p>The <a href="./reports/nvda_analysis.html">nvda_analysis.html</a> file contains the main report.</p>
+<div id="nvidia-stock-price-time-series-analysis---da5030-final-project" class="section level1">
+<h1>Nvidia stock price time series analysis - DA5030 Final Project</h1>
+<div id="overview" class="section level2">
+<h2>Overview</h2>
+<p>The reports directory contains the rendered html reports as well as the Rmarkdown and Jupyter notebooks for this project. There are convienence links below to these reports as well.</p>
 <p>The function that gathers the data for this project was developed in <a href="./reports/wrangle.html">wrangle.html</a>.</p>
-<p>There are two other reports besides the main analysis where I build models in python. They are the <a href="./reports/knn_ts.html">knn_ts.html</a> report and the <a href="./reports/lstm_rnn.html">lstm_rnn.html</a> report.</p>
+<p>The <a href="./reports/nvda_analysis.html">nvda_analysis.html</a> file contains the main report.</p>
+<p>There are two other reports besides the main analysis where I build python based models in Jupyter notebooks. They are the <a href="./reports/knn_ts.html">knn_ts.html</a> report and the <a href="./reports/lstm_rnn.html">lstm_rnn.html</a> report.</p>
+</div>
+<div id="setup-to-recapitulate-results" class="section level2">
+<h2>Setup to recapitulate results</h2>
+<p>Run the following code to clone the project to a local directory.</p>
+<pre><code>git clone git@github.com:tylerhill90/DA5030_final_project.git
+cd DA5030_final_project/</code></pre>
+<p>To run the python code you will need to start a virtual environment and install all necessary packages from the requirements.txt file.</p>
+<pre><code>python3 -m venv venv
+source venv/bin/activate  # For linux/mac
+#source venv\Scripts\activate.bat  # For Windows
+pip install -r requirements.txt</code></pre>
+<p>The R package dependencies are managed with renv which should automatically download/install packages the first time you open an R environment within the project directory via the .Rprofile. If this is not the case renv should run when you execute the <a href="./reports/nvda_analysis.Rmd">nvda_analysis.Rmd</a> file as well.</p>
+</div>
 </div>
 
 
