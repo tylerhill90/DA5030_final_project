@@ -1,0 +1,6 @@
+venv
+*.Rproj
+.Rhistory
+.Rprofile
+.Rproj.user
+.ipynb_checkpoints

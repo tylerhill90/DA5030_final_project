@@ -1,0 +1,747 @@
+---
+title: "NVDA univariate forecasting analysis"
+author: "Tyler Hill"
+date: "5/3/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+setwd("..")
+source("./setup.R")
+setwd("./reports")
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+
+Using daily Nvidia (stock symbol NVDA) closing price stock data I will develop functionality for plotting OHCL stock price data, exponential weight moving average data, and decomposing the time series data. I will then split the data for training, validation, and testing so I can develop exponential smoothing, ARIMA, Prophet, kNN, and LSTM-RNN models for time series for forecasting.
+
+The intent of this analysis is to develop models for predicting the price of NVDA five days out to help inform weekly options trading strategies.
+
+### Contents
+
+- [Input the data]
+
+- [Visualizing the data]
+
+- [Decompose the data]
+
+- [Split the data]
+
+- [Exponential smoothing]
+
+- [ARIMA]
+
+- [Prophet]
+
+- [kNN time series]
+
+- [LSTM-RNN]
+
+- [Building an ensemble model]
+
+## Input the data
+
+I will use the [reticulate](https://rstudio.github.io/reticulate/) R package to interface with the Python code I wrote in [wrangle.html](./wrangle.html) to fetch stock symbol data. I will only keep dates up until April 29th, 2022 so that the code is more reproducible.
+
+```{r}
+stock_symbol <- "NVDA" 
+nvda <- get_stonk(stock_symbol)
+# Need to convert to dataframe
+df_nvda <- nvda$data %>%
+  py_to_r() %>% as.data.frame() %>% 
+  rownames_to_column("date") %>% 
+  mutate(date = as.Date(date, format = "%Y-%m-%d")) %>% 
+  filter(date <= "2022-04-29")
+df_nvda %>% tail()
+```
+
+Now let's convert the data frame to an xts time series object. I will also drop the volume data for now.
+
+```{r}
+xts_nvda <- xts(df_nvda[-c(1,6)], order.by = df_nvda$date, frequency = 365.25) %>% na.approx(na.rm = TRUE)
+head(xts_nvda)
+```
+
+## Visualizing the data
+
+I will now create a [candlestick](https://en.wikipedia.org/wiki/Candlestick_chart) OHLC plot using an [R wrapper](https://cran.r-project.org/web/packages/highcharter/index.html) of the [highcharts](https://www.highcharts.com/) library. My intent is to add the [EWMA](https://en.wikipedia.org/wiki/Moving_average#Exponential_moving_average) analysis I did in python onto this in a way such that the OHLC data is shown first and then the user can select from the 4 various EWMA windows to view them on top of the candlestick plot. Here I will only show the 12 and 26 day EWMA.
+
+In order to do this I must first convert the EWMA data to R appropriate xts objects.
+
+```{r}
+ewma <- data.frame(
+            date = nvda$ewma$`12` %>% 
+              py_to_r() %>% as.data.frame() %>% 
+              rownames_to_column("date") %>% 
+              mutate(date = as.Date(date, format = "%Y-%m-%d")) %>% 
+              dplyr::select(date) %>% as.vector(),
+            ewma12 = nvda$ewma$`12` %>% py_to_r() %>% as.vector(),
+            ewma26 = nvda$ewma$`26` %>% py_to_r() %>% as.vector(),
+            ewma50 = nvda$ewma$`50` %>% py_to_r() %>% as.vector(),
+            ewma200 = nvda$ewma$`200` %>% py_to_r() %>% as.vector()
+          ) %>% 
+  mutate(
+    ewma12 = xts(ewma12, order.by = date, frequency = 365.25) %>% na.approx(na.rm = TRUE),
+    ewma26 = xts(ewma26, order.by = date, frequency = 365.25) %>% na.approx(na.rm = TRUE),
+    ewma50 = xts(ewma50, order.by = date, frequency = 365.25) %>% na.approx(na.rm = TRUE),
+    ewma200 = xts(ewma200, order.by = date, frequency = 365.25) %>% na.approx(na.rm = TRUE)
+  ) %>% 
+  filter(date <= "2022-04-29")
+ewma <- xts(dplyr::select(ewma, -date), order.by = ewma$date)
+ewma %>% tail()
+```
+
+Now I can plot my EWMA analysis on top of a candlestick plot using highchart.
+
+**Note:** the highchart theme `thm` I am using is defined in `../setup.R`.
+
+```{r}
+xts_nvda %>%
+  hchart(upColor = "#67e826", color = "#db003e", lineColor = "#696969", name = "OHLC") %>%
+  hc_title(text = paste0(stock_symbol, " - EWMA analysis")) %>% 
+  hc_add_theme(thm) %>%
+  hc_tooltip(crosshairs = FALSE, valueDecimals = 2) %>% 
+  hc_add_series(data = ewma$ewma12, color = "#9671e5", name = "12 day:") %>% 
+  hc_add_series(data = ewma$ewma26, color = "#e571a9", name = "26 day:")
+```
+
+To explore the data above you can select a time frame in the upper left and then slide the window along the scroll bar on the bottom.
+
+From exploring the figure above we can see that generally when the 12 day EWMA is above the 26 day there is bullish action where as the opposite is also true and when the two values are very similar there is little price movement. While this is not a precise forecast it does give us useful information.
+
+## Decompose the data
+
+I will now explore the methodology for visualizing the decomposition of the Closing price data.
+
+Let's start with a [decomposition](https://otexts.com/fpp2/decomposition.html) of the data before we move on to any transformations.
+
+```{r}
+close_ts <- ts(xts_nvda$Close, frequency = 365.25)
+decompose(close_ts) %>% plot()
+```
+
+We can clearly see that the data is not stationary and has a stark trend upwards at the end. There is also a repeating seasonality component and the last quarter or so of the data displays increasing variance in the residuals.
+
+Let's look at it's [Autocorrelation Function (ACF) and Partial Autocorrelation Function (PACF)](https://machinelearningmastery.com/gentle-introduction-autocorrelation-partial-autocorrelation/) plots.
+
+```{r}
+close_ts %>% ggtsdisplay(lag.max = 20, main = paste0(stock_symbol, " - NVDA closing price Series, ACF and PACF"))
+```
+
+From the PACF we can see that a lag of 1 is most appropriate.
+
+Below is a generalized function to grid search for the best transformation function and [differencing](https://www.statistics.com/glossary/differencing-of-time-series/) lag to use for performing a [stationary](https://en.wikipedia.org/wiki/Stationary_process) transformation. I'll be determining the "best" stationary transformation as the lowest standard deviation in a rolling variance window of 20% of the data.
+
+The default settings only use two lags and the following transformation functions.
+
+- No transformation
+- Log
+- Square root
+- [Box-Cox](https://towardsdatascience.com/box-cox-transformation-explained-51d745e34203)
+
+```{r}
+# Return either best trans data or entire grid search
+determine_trans <- function(xts_obj, lags=1:2, prop_win=0.2, all_=FALSE) {
+  lambda = BoxCox.lambda(xts_obj, method = "loglik")
+  boxcox <- function(x, lambda) {
+    lambda = BoxCox.lambda(x, method = "loglik")
+    BoxCox(x, lambda)
+  }
+  inv_boxCox <- function(x, lambda = lambda) {
+    if(lambda == 0) exp(x) else(lambda*x + 1)^(1/lambda)
+  }
+  funcs <- c(function(x){x}, log, sqrt, boxcox)
+  names(funcs) <- c("no_trans", "log", "sqrt", "boxcox")
+  inv_funcs <- c(function(x){x}, exp, function(x){x**2}, inv_boxCox)
+  names(inv_funcs) <- c("no_trans", "exp", "square", "inv_boxcox")
+  
+  min_sd_val <- Inf
+  min_sd <- ""
+  all_trans <- list()
+  names_list <- c()
+  {for(l in lags) {
+    for(i in 1:length(funcs)) {
+      name = names(funcs)[i]
+      func = funcs[[i]]
+      inv_func = inv_funcs[[i]]
+      trans <- xts_obj %>% func
+      diff <- diff(trans, lag = l)
+      diff[l:1,1] <- 0 # Impute initial diff'ed values to 0
+      roll_var <- na.omit(runSD(diff, n = round(nrow(diff)*prop_win)))
+      roll_var_sd <- sd(roll_var)
+      
+      dat <- list(
+        "name" = paste0("l", l, "_", name),
+        "lag" = l,
+        "func" = func,
+        "inv_func" = inv_func,
+        "og" = xts_obj,
+        "trans" = trans,
+        "diff" = diff,
+        "decomp" = decompose(ts(diff, frequency = 365.25)),
+        "lambda" = lambda
+      )
+      assign(paste0("l", l, "_", name), dat)
+      all_trans[[length(all_trans)+1]] <- dat
+      names_list <- c(names_list, paste0("l", l, "_", name))
+      if(roll_var_sd < min_sd_val) {min_sd_val <- roll_var_sd; min_sd <- paste0("l", l, "_", name)}
+    }
+  }}
+  names(all_trans) <- names_list
+  if(!all_) {
+    return(get(min_sd))
+  }
+  all_trans
+}
+
+trans_ts <- determine_trans(xts_nvda[,4])
+trans_ts$name
+```
+
+It seems performing a log transformation and using a lag of 1 results in the most stationary series as I have defined it.
+
+Let's see it decomposed.
+
+```{r}
+trans_ts$decomp %>% plot()
+```
+
+It certainly looks more stationary now.
+
+Let's look at the transformed and lagged series as well as it's ACF and PACF.
+
+```{r}
+trans_ts$diff %>% ggtsdisplay(lag.max = 20, main = paste0(stock_symbol, " - Log transformed with lag 1 Series, ACF and PACF"))
+```
+
+This series certainly looks more stationary as there is no clear trend and the ACF/PACF are basically all non-significant. There is one lag in each that is at just about 0.05 but we could expect one to reach this threshold since we are showing 20 lags.
+
+## Split the data
+
+Because we are using time series data we should not randomize our data but simply take the first chunk for training and validate/test on the latter chunks. I will use a 70/20/10 percent split for training, validating, and testing respectively.
+
+```{r}
+split_data <- function(data, og_data, train_p=0.7, validate_p=0.2) {
+  if(sum(train_p, validate_p) >= 1) stop("sum of train_p and validate_p is equal to or greater than 1. No test set...")
+  n <- nrow(data)
+  a <- round(n*train_p)
+  b <- round(n*validate_p)
+  train <- data[1:a]
+  validate <- data[(a+1):(a+b)]
+  test <- data[(a+b+1):n]
+  og_train <- og_data[1:a]
+  og_validate <- og_data[(a+1):(a+b)]
+  og_test <- og_data[(a+b+1):n]
+  list(
+    "train" = train, "validate" = validate, "test" = test,
+    "og_train" = og_train, "og_validate" = og_validate, "og_test" = og_test
+  )
+}
+
+split_data <- split_data(trans_ts$diff, trans_ts$og)
+
+# Quickly plot to show the data is split correctly
+plot(split_data$train, main = paste0("NVDA - train data - ", nrow(split_data$train), " samples"))
+plot(split_data$validate, main = paste0("NVDA - validate data - ", nrow(split_data$validate), " samples"))
+plot(split_data$test, main = paste0("NVDA - test data - ", nrow(split_data$test), " samples"))
+```
+
+## Exponential smoothing
+
+I will explore using [exponential smoothing](https://otexts.com/fpp2/expsmooth.html) via the [forecast](https://cran.r-project.org/web/packages/forecast/index.html) package's function `ets` and the stationary training data.
+
+```{r}
+(ets_fit <- ets(split_data$train))
+```
+
+From the model output above we can see that only an alpha smoothing parameters was estimated, implying that beta, gamma, and phi are not descriptive for this time series.
+
+```{r}
+checkresiduals(ets_fit)
+```
+
+Due to the non-significant p-value in the Ljung-Box test, the lack of very significant lags in the ACF and a normally shaped histogram of residual centered around 0 we can say that this model does a good job capturing all of the available information for forecasting.
+
+Let's make some predictions with the ets model.
+
+```{r}
+ets_preds <- forecast(ets_fit, h=nrow(split_data$validate))
+autoplot(ets_preds)
+```
+
+As you could have guessed, making prediction on our transformed data results in not very useful predictions.
+
+Let's untramsform the predictions and plot them alongside the actual data.
+
+```{r}
+untrans <- function(x, trans_ts, og_data) {
+  xi = og_data[1:trans_ts$lag] %>% trans_ts$func()
+  x <- x %>% diffinv(lag = trans_ts$lag, xi = xi) %>% trans_ts$inv_func() %>% as.vector()
+  x[2:length(x)]
+}
+
+ets_preds_xts <- data.frame(
+    preds = untrans(ets_preds$mean, trans_ts, split_data$og_validate),
+    Close = split_data$og_validate$Close
+  ) %>% 
+  xts(order.by = index(split_data$og_validate), frequency = 365.25)
+
+hchart(ets_preds_xts$Close, color = "#9671e5", name = "Closing price") %>%
+  hc_title(text = paste0(stock_symbol, " - Comparing ARIMA predictions to actual price")) %>% 
+  hc_add_theme(thm) %>%
+  hc_tooltip(crosshairs = FALSE, valueDecimals = 2) %>% 
+  hc_add_series(data = ets_preds_xts$preds, color = "#e571a9", name = "ARIMA predictions")
+```
+
+We can clearly see that the ets model results in a general bullish prediction that does a better job of following the actual price early on but diverges from the actual pretty quickly.
+
+Let's calculate the [RMSE](https://en.wikipedia.org/wiki/Root-mean-square_deviation) using the `rmse` function from the package [Metrics](https://cran.r-project.org/web/packages/Metrics/index.html).
+
+```{r}
+(rmse_ets <- rmse(ets_preds_xts$preds, ets_preds_xts$Close))
+```
+Let's compare this RMSE to the RMSE of our model on the raw data (ie. not transformed to be more stationary).
+
+```{r}
+ets_preds_og <- forecast(ets_fit, h=nrow(split_data$og_validate))
+ets_preds_xts_og <- data.frame(
+    preds = ets_preds_og$mean,
+    Close = split_data$og_validate$Close
+  ) %>% 
+  xts(order.by = index(split_data$og_validate), frequency = 365.25)
+(rmse_ets_og <- rmse(ets_preds_xts_og$preds, ets_preds_xts_og$Close))
+```
+It looks like using the transformed data results in a much better RMSE.
+
+However, this result isn't really how I intend to use the model. Instead my intent is to only forecast up to five days ahead to inform decisions in options trading. In order to test the model adequately for this purpose I will continuously update the input data and forecast five days out in a [walk forward validation](https://machinelearningmastery.com/backtest-machine-learning-models-time-series-forecasting/) approach
+
+```{r, cache=TRUE}
+n_days <- 5
+ets_preds <- c()
+cat("Fitting ETS models:\n")
+for(i in 0:(nrow(split_data$validate)-n_days)) {
+  if(i %% n_days == 0) cat(paste0(i, " "))
+  ets_model <- ets(rbind.xts(split_data$train, split_data$validate[0:i]))
+  preds <- forecast(ets_model, h = n_days)
+  if(i == 0) {
+    xi <- split_data$og_train[(length(split_data$og_train)-trans_ts$lag):length(split_data$og_train)]
+  } else {
+    j <- i - (i %% n_days)
+    xi <- split_data$og_validate[i:(i+trans_ts$lag)]
+  }
+  untrans_preds <- untrans(preds$mean, trans_ts, xi)
+  ets_preds <- c(ets_preds, untrans_preds[n_days])
+}
+```
+
+Now that we have collected all the prediction data from each of our five day out forecasts lets plot it and compare to the actual price.
+
+```{r}
+n <- length(split_data$og_validate$Close)
+back_val_ets_preds_xts <- data.frame(
+    preds = ets_preds,
+    Close = split_data$og_validate$Close[n_days:n]
+  ) %>% 
+  xts(order.by = index(split_data$og_validate)[n_days:n], frequency = 365.25)
+
+hchart(back_val_ets_preds_xts$Close, color = "#9671e5", name = "Closing price") %>%
+  hc_title(text = paste0(stock_symbol, " - Comparing ETS predictions to actual price in validate set")) %>% 
+  hc_add_theme(thm) %>%
+  hc_tooltip(crosshairs = FALSE, valueDecimals = 2) %>% 
+  hc_add_series(data = back_val_ets_preds_xts$preds, color = "#e571a9", name = "ETS predictions")
+```
+
+Zooming in to take a closer look, it appears that this rolling window five day forecast simply results in a time series that mirrors the actual data shifted five days into the future. This results in a pretty naive forecast as we could effectively recapitulate these results by just extending out the current closing price as the price for our five day out forecast.
+
+Let's calculate the RMSE so we can compare this model to others later.
+
+```{r}
+(rmse_ets <- rmse(back_val_ets_preds_xts$preds, back_val_ets_preds_xts$Close))
+rmse_df <- data.frame(model = "ets", val_rmse = rmse_ets)
+```
+
+### Performance on the test set
+
+I will now calculate predictions using the walk forward validation technique on the test set.
+
+```{r, cache=TRUE}
+train_val <- rbind.xts(split_data$train, split_data$validate)
+n_days <- 5
+ets_preds_test <- c()
+cat("Fitting ETS models:\n")
+for(i in 0:(nrow(split_data$test)-n_days)) {
+  if(i %% n_days == 0) cat(paste0(i, " "))
+  ets_model <- ets(rbind.xts(train_val, split_data$test[0:i]))
+  preds <- forecast(ets_model, h = n_days)
+  if(i == 0) {
+    xi <- split_data$og_validate[(length(split_data$og_validate)-trans_ts$lag):length(split_data$og_validate)]
+  } else {
+    j <- i - (i %% n_days)
+    xi <- split_data$og_test[i:(i+trans_ts$lag)]
+  }
+  untrans_preds <- untrans(preds$mean, trans_ts, xi)
+  ets_preds_test <- c(ets_preds_test, untrans_preds[n_days])
+}
+```
+
+Now let's plot it.
+
+```{r}
+n <- length(split_data$og_test$Close)
+back_val_ets_preds_xts_test <- data.frame(
+    preds = ets_preds_test,
+    Close = split_data$og_test$Close[n_days:n]
+  ) %>% 
+  xts(order.by = index(split_data$og_test)[n_days:n], frequency = 365.25)
+
+hchart(back_val_ets_preds_xts_test$Close, color = "#9671e5", name = "Closing price") %>%
+  hc_title(text = paste0(stock_symbol, " - Comparing ETS predictions to actual price in test set")) %>% 
+  hc_add_theme(thm) %>%
+  hc_tooltip(crosshairs = FALSE, valueDecimals = 2) %>% 
+  hc_add_series(data = back_val_ets_preds_xts_test$preds, color = "#e571a9", name = "ETS predictions")
+```
+
+As you could have guessed, we get a similar result to what we saw in the validate set.
+
+let's compute the RMSE.
+
+```{r}
+(rmse_ets_test <- rmse(back_val_ets_preds_xts$preds, back_val_ets_preds_xts$Close))
+```
+
+
+## ARIMA
+
+### Build the model
+
+I will now use the `auto.arima` function, also from the forecast package. As the name suggests, this function determines the appropriate values for (p, d, q) in building the ARIMA model. I will create a wrapper function so I can have a Boolean option for `quick_search` which will use
+the default parameters, otherwise it will set `stepwise` and `approximation` to `FALSE`. This performs a more exhaustive search but takes much longer. I will use the [AICc](https://en.wikipedia.org/wiki/Akaike_information_criterion) as the value for determining best fit in case the sample size is small for a relatively new stock (not the case for NVDA but that is fine).
+
+```{r}
+fit_auto_arima <- function(data, quick_search = FALSE) {
+  if(quick_search) {
+    return(auto.arima(data, ic = "aicc"))
+  }
+  auto.arima(data, ic = "aicc", stepwise = FALSE, approximation = FALSE)
+}
+(quick_auto <- fit_auto_arima(split_data$train, quick_search = TRUE))
+(slow_auto <- fit_auto_arima(split_data$train))
+```
+
+The `slow_auto` produced a smaller AICc so we will use this approach
+
+### Test the model
+
+Let's look at the model residuals.
+
+```{r}
+checkresiduals(slow_auto)
+```
+
+We can again see from a non-significant p-value of the Ljung-Box test, the non-significant lags in the ACF plot, and the normally distributed and centered on zero residuals that our model is doing a good job at capturingg the available information.
+
+Let's produce a naive forecast using our model and plot the predictions alongside the test set data. I will again un-transform the predictions and validation data to the actual price.
+
+```{r}
+arima_preds <- forecast(slow_auto, h = nrow(split_data$validate))
+
+arima_preds_xts <- data.frame(
+    preds = untrans(arima_preds$mean, trans_ts, split_data$og_validate),
+    Close = split_data$og_validate$Close
+  ) %>% 
+  xts(order.by = index(split_data$og_validate), frequency = 365.25)
+
+hchart(arima_preds_xts$Close, color = "#9671e5", name = "Closing price") %>%
+  hc_title(text = paste0(stock_symbol, " - Comparing ARIMA predictions to actual price")) %>% 
+  hc_add_theme(thm) %>%
+  hc_tooltip(crosshairs = FALSE, valueDecimals = 2) %>% 
+  hc_add_series(data = arima_preds_xts$preds, color = "#e571a9", name = "ARIMA predictions")
+```
+
+It looks like the ARIMA model is capturing the general bullish trend but under forecasts in the long run.
+
+Let's calculate the RMSE.
+
+```{r}
+(rmse_slow_auto <- rmse(arima_preds_xts$preds, arima_preds_xts$Close))
+```
+
+This RMSE is worse than the naive RMSE using ets.
+
+Let's again use the same walk forward validation approach to compile five day out forcasts. To save on computation time I will only re-evaluate the model every fifth day.
+
+```{r cache=TRUE}
+n_days <- 5
+arima_preds <- c()
+cat("Fitting ARIMA models:\n")
+for(i in 0:(nrow(split_data$validate)-n_days)) {
+  if(i %% n_days == 0) {
+    cat(paste0(i, " "))
+    arima_model <- fit_auto_arima(rbind.xts(split_data$train, split_data$validate[0:i]))
+  }
+  preds <- forecast(arima_model, h = n_days)
+  if(i == 0) {
+    xi <- split_data$og_train[(length(split_data$og_train)-trans_ts$lag):length(split_data$og_train)]
+  } else {
+    j <- i - (i %% n_days)
+    xi <- split_data$og_validate[i:(i+trans_ts$lag)]
+  }
+  untrans_preds <- untrans(preds$mean, trans_ts, xi)
+  arima_preds <- c(arima_preds, untrans_preds[n_days])
+}
+```
+
+Now let's plot our predictions and compare to the actual price.
+
+```{r cache=TRUE}
+n <- length(split_data$og_validate$Close)
+back_val_arima_preds_xts  <- data.frame(
+    preds = arima_preds,
+    Close = split_data$og_validate$Close[n_days:n]
+  ) %>% 
+  xts(order.by = index(split_data$og_validate)[n_days:n], frequency = 365.25)
+
+hchart(back_val_arima_preds_xts$Close, color = "#9671e5", name = "Closing price") %>%
+  hc_title(text = paste0(stock_symbol, " - Comparing ARIMA predictions to actual price")) %>% 
+  hc_add_theme(thm) %>%
+  hc_tooltip(crosshairs = FALSE, valueDecimals = 2) %>% 
+  hc_add_series(data = back_val_arima_preds_xts$preds, color = "#e571a9", name = "ARIMA predictions")
+```
+
+It's no surprise that we see the same sort of result as with our ets model. The five day forecaste price is essentially just the current closing price.
+
+Let's calculate the RMSE too.
+
+```{r}
+rmse_slow_auto <- rmse(back_val_arima_preds_xts$preds, back_val_arima_preds_xts$Close)
+to_add <- data.frame(model = "arima", val_rmse = rmse_slow_auto)
+(rmse_df <- rbind(rmse_df, to_add))
+```
+
+The RMSE is very similar to the ets RMSE.
+
+Seeing as this approach is so similar to ets I will forego walk forward validation using the test set as I don't plan on using arima going forward anyways.
+
+## Prophet
+
+[Prophet](https://facebook.github.io/prophet/) is an open source additive regression algorithm for time series forecasting developed by Meta. It is intended to work best with seasonal data as it fits non-linear trends to yearly, monthly, weekly, and even daily seasonality. One benefit of prophet is we do not have to transform the data to be more stationary first as the algorithm is built to be out of the box ready for any time series data.
+
+```{r}
+prep4prophet <- function(data, ds, y) {
+  rename(data, ds = !!ds, y = !!y) %>% 
+    dplyr::select(ds, y) %>% 
+    mutate(ds = as.POSIXct(ds, origin = ds[1]))
+}
+proph_train <- prep4prophet(
+  split_data$og_train %>% 
+    as.data.frame() %>% 
+    rownames_to_column("date"),
+  "date", "Close"
+)
+proph_fit <- prophet(proph_train)
+```
+
+The warning about daily seasonality is due to our time series being reported daily and thus is not granular enough for this type of seasonality.
+
+Now that the model is fit lets make some predictions nd explore how the model did.
+
+```{r}
+proph_val <- prep4prophet(
+  split_data$og_validate %>% 
+    as.data.frame() %>% 
+    rownames_to_column("date"),
+  "date", "Close"
+)
+
+proph_predict <- predict(proph_fit, proph_val)
+
+prophet_plot_components(proph_fit, proph_predict)
+```
+
+From the seasonality components above we can see a general slow trend upwards over the years and a monthly trend that dips in the summer months but rebounds throughout the fall into winter. The weekly seasonality components is suspect in my opinion as the data we are using does not have data points for Sunday and Saturday so maybe prophet is imputing these (as the algorithm does this too out of the box) and thus they are artificially inflated. 
+
+```{r}
+plot(proph_fit, proph_predict)
+```
+
+The plot above clear shows a general trend upwards and ever expanding confidence intervals the further out in time the forecast goes.
+
+```{r}
+val_proph_preds <- split_data$og_validate %>% 
+  as.data.frame() %>% 
+  mutate(preds = as.vector(proph_predict$yhat)) %>% 
+  as.xts()
+
+hchart(val_proph_preds$Close, color = "#9671e5", name = "Closing price") %>%
+  hc_title(text = paste0(stock_symbol, " - Comparing Prophet predictions to actual price")) %>% 
+  hc_add_theme(thm) %>%
+  hc_tooltip(crosshairs = FALSE, valueDecimals = 2) %>% 
+  hc_add_series(data = val_proph_preds$preds, color = "#e571a9", name = "Prophet predictions")
+```
+
+Comparing the long forecast to the validation data shows much the same result as the ARIMA and ets result.
+
+Let's calculate the RMSE on the naive approach to validation.
+
+```{r}
+(rmse_proph <- rmse(val_proph_preds$Close, val_proph_preds$preds))
+```
+
+It is much the same as we have already seen
+
+Now let's employ the same walk forward validation strategy.
+
+```{r, cache=TRUE}
+n_days <- 5
+prophet_preds <- c()
+cat("Fitting Prophet models:\n")
+for(i in 0:(nrow(split_data$validate)-n_days)) {
+  if(i %% n_days == 0) {
+    cat(paste0(i, " "))
+    proph_train <- prep4prophet(bind_rows(
+      split_data$og_train %>% 
+        as.data.frame() %>%
+        rownames_to_column("date"),
+      split_data$og_validate[0:i] %>% 
+        as.data.frame() %>% 
+        rownames_to_column("date")
+    ), "date", "Close")
+    proph_model <- prophet(proph_train) %>% suppressMessages()
+  }
+  proph_val <- prep4prophet(
+    split_data$og_validate[i:(i + n_days)] %>% 
+      as.data.frame() %>% 
+      rownames_to_column("date"),
+    "date", "Close"
+    ) %>% dplyr::select(ds)
+  proph_predict <- predict(proph_model, proph_val)
+  prophet_preds <- c(prophet_preds, proph_predict$yhat[n_days])
+}
+```
+
+And again, plot the results.
+
+```{r}
+back_val_proph_preds <- data.frame(
+    preds = prophet_preds,
+    Close = split_data$og_validate$Close[n_days:n]
+  ) %>% 
+  xts(order.by = index(split_data$og_validate)[n_days:n], frequency = 365.25)
+
+hchart(back_val_proph_preds$Close, color = "#9671e5", name = "Closing price") %>%
+  hc_title(text = paste0(stock_symbol, " - Comparing Prophet predictions to actual price")) %>% 
+  hc_add_theme(thm) %>%
+  hc_tooltip(crosshairs = FALSE, valueDecimals = 2) %>% 
+  hc_add_series(data = back_val_proph_preds$preds, color = "#e571a9", name = "Prophet predictions")
+```
+
+This is certainly an improvement from the naive forecast but results in some bizarre behavior. It seems like prophet is unable to handle the strong trend in the non-transformed data.
+
+```{r}
+rmse_proph <- rmse(back_val_proph_preds$preds, back_val_proph_preds$Close)
+to_add <- data.frame(model = "prophet", val_rmse = rmse_proph)
+(rmse_df <- rbind(rmse_df, to_add))
+```
+
+I will again forego the walk forward validation using the test set as I don't plan on using prophet going forward.
+
+## kNN time series
+
+See the [knn_ts.html](./knn_ts.html) report for more.
+
+## LSTM-RNN
+
+See the [lstm_rnn.html](./lstm_rnn.html) report for more.
+
+## Building an ensemble model
+
+While it has been a very educational process to explore these three time series forecasting models, I do not think they do a good job at applying to my intended use case. These models are able to naively capture the short term trend (on the order of months) but they are not well suited for the five day out forecasts I am interested in.
+
+For the sake of this project I will use the exponential smoothing model using the ets function in building an ensemble model as it has the lowest RMSE.
+
+I have explored two other models in python for time series forecasting using NVDA stock price data.
+
+I made a custom kNN time series algorithm in this [report](./knn_ts.html) and an LSTM-RNN multivariate model in this [report](./lstm_rnn.html).
+
+I will combine run each of these three models on the test set using the walk forward validation technique.
+
+```{r, cache=TRUE}
+n_days <- 5
+
+# ets
+t_dat <- rbind(split_data$og_train, split_data$og_validate, split_data$og_test)
+trans_ts <- determine_trans(t_dat)
+ets_preds <- c()
+cat("Predicting ETS ...\n")
+for(i in 0:(nrow(split_data$test)-n_days)) {
+  ets_fit <- ets(rbind.xts(split_data$train, split_data$validate, split_data$test[0:i]))
+  ets_pred <- forecast(ets_fit, h=5)
+  if(i == 0) {
+    xi <- split_data$og_train[(length(split_data$og_validate)-trans_ts$lag):length(split_data$og_validate)]
+  } else {
+    xi <- split_data$og_test[i:(i+trans_ts$lag)]
+  }
+  untrans_preds <- untrans(ets_pred$mean, trans_ts, xi)
+  ets_preds <- c(ets_preds, untrans_preds[n_days])
+}
+
+# knn_ts
+cat("Predicting kNN ...\n")
+knn_preds <- c()
+for(i in 0:(nrow(split_data$og_test)-n_days)) {
+  data <- rbind.xts(split_data$og_train, split_data$og_validate, split_data$og_test[0:i])
+  data <- data[,1] %>% r_to_py()
+  pred <- knn_ts(data, 15, 8, 2, 5)
+  knn_preds <- c(knn_preds, pred$predictions[5])
+}
+
+# lstm-rnn
+cat("Predicting LSTM-RNN ...\n")
+start <- index(split_data$og_test) %>% head(1)
+end <- index(split_data$og_test) %>% tail(1)
+lstm_preds <- ensemble_lstm(start, end)
+
+# compile
+preds_df <- data.frame(
+  ets = ets_preds[32:length(ets_preds)],
+  knn = knn_preds[32:length(knn_preds)],
+  lstm = lstm_preds
+)
+preds_df$mu <- rowMeans(preds_df)
+preds_df$Close <- split_data$og_test$Close[36:length(split_data$og_test$Close)] %>% as.vector()
+index <- index(split_data$og_test$Close[36:length(split_data$og_test$Close)])
+preds_df <- xts(preds_df, order.by = index)
+head(preds_df)
+```
+
+```{r}
+hchart(preds_df$Close, color = "#9671e5", name = "Closing price") %>%
+  hc_title(text = paste0(stock_symbol, " - Comparing ensemble predictions to actual price")) %>% 
+  hc_add_theme(thm) %>%
+  hc_tooltip(crosshairs = FALSE, valueDecimals = 2) %>% 
+  hc_add_series(data = preds_df$mu, color = "#e571a9", name = "Ensemble predictions")
+```
+
+It looks like the ensemble model performed reasonabley well on the test set.
+
+Let's look at the RMSE.
+
+```{r}
+(rmse_test <- rmse(preds_df$Close, preds_df$mu))
+```
+
+That is a decent RMSE all things considered. 
+
+Lets look at RMSE of each of the sub models.
+
+```{r}
+# ETS
+rmse(preds_df$Close, preds_df$ets)
+# kNN
+rmse(preds_df$Close, preds_df$knn)
+# LSTM-RNN
+rmse(preds_df$Close, preds_df$lstm)
+```
+
+It looks like the ETS model performs best. This is kinda of discouraging since the five day forecast with ETS model was basically just an extension of the current price. What these results tell me is that trying to predict stock prices is very very hard and my simple approaches do not come close to a good answer.
