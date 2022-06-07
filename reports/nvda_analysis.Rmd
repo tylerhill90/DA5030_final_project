@@ -418,53 +418,13 @@ Let's calculate the RMSE so we can compare this model to others later.
 rmse_df <- data.frame(model = "ets", val_rmse = rmse_ets)
 ```
 
-### Performance on the test set
-
-I will now calculate predictions using the walk forward validation technique on the test set.
-
 ```{r, cache=TRUE}
-train_val <- rbind.xts(split_data$train, split_data$validate)
-n_days <- 5
-ets_preds_test <- c()
-cat("Fitting ETS models:\n")
-for(i in 0:(nrow(split_data$test)-n_days)) {
-  if(i %% n_days == 0) cat(paste0(i, " "))
-  ets_model <- ets(rbind.xts(train_val, split_data$test[0:i]))
-  preds <- forecast(ets_model, h = n_days)
-  if(i == 0) {
-    xi <- split_data$og_validate[(length(split_data$og_validate)-trans_ts$lag):length(split_data$og_validate)]
-  } else {
-    j <- i - (i %% n_days)
-    xi <- split_data$og_test[i:(i+trans_ts$lag)]
-  }
-  untrans_preds <- untrans(preds$mean, trans_ts, xi)
-  ets_preds_test <- c(ets_preds_test, untrans_preds[n_days])
-}
 ```
 
-Now let's plot it.
-
 ```{r}
-n <- length(split_data$og_test$Close)
-back_val_ets_preds_xts_test <- data.frame(
-    preds = ets_preds_test,
-    Close = split_data$og_test$Close[n_days:n]
-  ) %>% 
-  xts(order.by = index(split_data$og_test)[n_days:n], frequency = 365.25)
-
-hchart(back_val_ets_preds_xts_test$Close, color = "#9671e5", name = "Closing price") %>%
-  hc_title(text = paste0(stock_symbol, " - Comparing ETS predictions to actual price in test set")) %>% 
-  hc_add_theme(thm) %>%
-  hc_tooltip(crosshairs = FALSE, valueDecimals = 2) %>% 
-  hc_add_series(data = back_val_ets_preds_xts_test$preds, color = "#e571a9", name = "ETS predictions")
 ```
 
-As you could have guessed, we get a similar result to what we saw in the validate set.
-
-let's compute the RMSE.
-
 ```{r}
-(rmse_ets_test <- rmse(back_val_ets_preds_xts$preds, back_val_ets_preds_xts$Close))
 ```
 
 
